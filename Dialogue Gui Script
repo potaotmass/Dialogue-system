@@ -1,0 +1,408 @@
+local RS = game:GetService("ReplicatedStorage")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TweenService")
+
+local DialogueModule = require(RS.Dialogue)
+local RichTextModule = require(RS.RichText)
+
+local Player = game.Players.LocalPlayer
+
+local Frame = script.Parent.Frame
+local ButtonFrame = Frame.Buttons
+local DialogueFrame = Frame.DialogueFrame
+local DialogueText = DialogueFrame.DialogueTextFrame.Dialogue
+
+local isAnimating = false
+local debounce = false
+
+local Dialogue = false
+local CurrentDialogue = 0
+
+local TalkingTo = nil
+
+local AlignPos
+local AlignOri
+
+local Connection1 = nil
+local Connection2 = nil
+
+local FrameInTween = TS:Create(Frame, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1.2, 0,1, 0)})
+local FrameOutTween = TS:Create(Frame, TweenInfo.new(.2, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {Size = UDim2.new(0, 0,0, 0)})
+
+local ButtonsInTween = TS:Create(ButtonFrame, TweenInfo.new(0.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {Size = UDim2.new(.25, 0, 1, 0)})
+local ButtonsOutTween = TS:Create(ButtonFrame, TweenInfo.new(.4, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {Size = UDim2.new(0, 0, 1, 0)})
+
+local InteractDebounce = false
+local InteractDebounce2 = false
+local Interact
+local DialogueHitBox
+
+local textObject
+
+Player.Character:WaitForChild("HumanoidRootPart").Touched:Connect(function(part)
+	if part.Name == "DialogueHitBox" then
+		if DialogueHitBox ~= part then
+			DialogueHitBox = part
+			Interact = part:FindFirstChild("Interact")
+
+			if Interact then
+				Interact.Enabled = true
+				local highlight = part.Parent:FindFirstChild("DialogueHighlight")
+				if highlight then
+					highlight.Enabled = true
+					TS:Create(highlight, TweenInfo.new(0.2), {OutlineTransparency = 0, FillTransparency = 0.8}):Play()
+				end
+
+				local textLabel = Interact:FindFirstChild("TextLabel")
+				if textLabel then
+					TS:Create(textLabel, TweenInfo.new(0.2), {TextTransparency = 0}):Play()
+				end
+			end
+		end
+	end
+end)
+
+Player.Character:WaitForChild("HumanoidRootPart").TouchEnded:Connect(function(part)
+	if DialogueHitBox == part then
+		local highlight = part.Parent:FindFirstChild("DialogueHighlight")
+		if highlight then
+			TS:Create(highlight, TweenInfo.new(0.2), {OutlineTransparency = 1, FillTransparency = 1}):Play()
+		end
+
+		if Interact then
+			local textLabel = Interact:FindFirstChild("TextLabel")
+			if textLabel then
+				TS:Create(textLabel, TweenInfo.new(0.2), {TextTransparency = 1}):Play()
+			end
+			Interact.Enabled = false
+		end
+
+		DialogueHitBox = nil
+	end
+end)
+
+function CheckIfPlayerIsInAreaForInteract(HRP)
+	HRP.Touched:Connect(function() end)
+	local touching = HRP:GetTouchingParts()
+	for i=1,#touching do
+		if touching[i].Name == "DialogueHitBox" then
+			touching[i]:FindFirstChild("Interact").Enabled = true
+			touching[i].Parent:FindFirstChild("DialogueHighlight").Enabled = true
+			TS:Create(touching[i].Parent:FindFirstChild("DialogueHighlight"), TweenInfo.new(0.2), {OutlineTransparency = 0,FillTransparency = .8}):Play()
+			local InteractInTween = TS:Create(touching[i]:FindFirstChild("Interact").TextLabel, TweenInfo.new(0.2), {TextTransparency = 0})
+			InteractInTween:Play()
+		end
+	end
+end
+
+function CheckIfPlayerIsInArea(HRP)
+	HRP.Touched:Connect(function() end)
+
+	local touching = HRP:GetTouchingParts()
+	for i=1,#touching do
+		if touching[i].Name == "DialogueHitBox" then
+			TalkingTo = touching[i].Parent.Name
+			TS:Create(touching[i].Parent:FindFirstChild("DialogueHighlight"), TweenInfo.new(0.2), {OutlineTransparency = 1,FillTransparency = 1}):Play()
+			local InteractOutTween = TS:Create(touching[i]:FindFirstChild("Interact").TextLabel, TweenInfo.new(0.2), {TextTransparency = 1})
+			InteractOutTween:Play()
+			InteractOutTween.Completed:Connect(function()
+				touching[i]:FindFirstChild("Interact").Enabled = false
+				touching[i].Parent:FindFirstChild("DialogueHighlight").Enabled = false
+			end)
+			return true
+		end
+	end
+	return false
+end
+
+local function DestroyAlign()
+	if AlignPos then
+		AlignPos:Destroy()
+		AlignPos = nil
+	end
+	if AlignOri then
+		AlignOri:Destroy()
+		AlignOri = nil
+	end
+	
+	for i, v in Player.Character.HumanoidRootPart:GetChildren() do
+		if v:IsA("AlignOrientation") or v:IsA("AlignPosition") then
+			if v.Name == "DialogueOri" or v.Name == "DialoguePos" then 
+				v:Destroy()
+			end
+		end
+	end
+end
+
+local function CleanUp()
+	if debounce then return end
+	
+	textObject:Show()
+	
+	debounce = true
+	CurrentDialogue = 0
+	CheckIfPlayerIsInAreaForInteract(Player.Character.HumanoidRootPart)
+
+	for i, v in DialogueText:GetDescendants() do
+		v:Destroy()
+	end
+
+	DestroyAlign()
+
+	if Connection1 then
+		Connection1:Disconnect()
+		Connection1 = nil
+	end
+	if Connection2 then
+		Connection2:Disconnect()
+		Connection2 = nil
+	end
+
+	FrameOutTween:Play()
+	FrameOutTween.Completed:Connect(function()
+		Frame.Visible = false
+		debounce = false
+		CurrentDialogue = 0
+		TalkingTo = nil
+		Dialogue = false
+	end)
+end
+
+local function Text()
+	if isAnimating or debounce then return end
+	CurrentDialogue += 1
+	
+	if Connection1 then
+		Connection1:Disconnect()
+		Connection1 = nil
+	end
+
+	if Connection2 then
+		Connection2:Disconnect()
+		Connection2 = nil
+	end
+
+	local CD = DialogueModule.GetDialogue(TalkingTo, CurrentDialogue)
+
+	if CD.Responses then
+		local Responses = DialogueModule.GetResponses(TalkingTo, CurrentDialogue)
+		for _, Button in ButtonFrame:GetChildren() do
+			if Button:IsA("ImageButton") then
+				Button.BackgroundTransparency = 1
+				Button.ImageTransparency = 1
+				Button.UIStroke.Transparency = 1
+				Button.TextLabel.TextTransparency = 1
+				Button.Active = false
+				Button.Interactable = false
+			end
+		end
+		for _, Response in ipairs(Responses) do
+			for _, Button in ButtonFrame:GetChildren() do
+				if Button:IsA("ImageButton") and Button.Name == tostring(Response.ButtonNumber) then
+					Button.BackgroundTransparency = 0.6
+					Button.ImageTransparency = 0.5
+					Button.UIStroke.Transparency = 0.8
+					Button.TextLabel.TextTransparency = 0
+					Button.Active = true
+					Button.Interactable = true
+					Button.TextLabel.Text = Response.Text
+
+					Button.MouseButton1Click:Connect(function()
+						if Response.Next ~= "Farewell" then
+							CurrentDialogue = Response.Next - 1
+							Text()
+						else
+							DestroyAlign()
+							CleanUp()
+						end
+					end)
+				end
+			end
+		end
+		ButtonsInTween:Play()
+		ButtonFrame.Visible = true
+	else
+		if ButtonsOutTween.PlaybackState ~= Enum.PlaybackState.Playing then
+			ButtonsOutTween:Play()
+			ButtonsOutTween.Completed:Connect(function()
+				ButtonFrame.Visible = false
+			end)
+		end
+	end
+
+	DialogueFrame.NameFrame.CharName.Text = "-" .. TalkingTo .. "-"
+
+	if CD.Type == "Farewell" then
+		DestroyAlign()
+	end
+	if CD.Type == "Condition" then
+		CurrentDialogue = CD.Condition() - 1
+		Text()
+		if not CD.Msg then return end
+	end
+	if CD.Condition then
+		CD.Condition()
+	end
+
+	local message = CD.Msg
+	DialogueText.Text = ""
+	textObject = RichTextModule:New(DialogueText, message, { Font = Enum.Font.Fondamento, TextStrokeTransparency = 0 })
+	isAnimating = true
+	debounce = true
+
+	task.spawn(function()
+		local success, err = pcall(function()
+			textObject:Animate(true)
+		end)
+		isAnimating = false
+		debounce = false
+		if not success then
+			warn("Error in text animation: " .. err)
+		end
+	end)
+
+	Connection1 = UIS.TouchTap:Connect(function(TPos, IsTyping)
+		if IsTyping then return end
+		textObject:Show()
+		if CD.Type == "Farewell" then
+			if Connection1 then
+				Connection1:Disconnect()
+				Connection1 = nil
+			else
+				return
+			end
+			if Connection2 then
+				Connection2:Disconnect()
+				Connection2 = nil
+			else
+				return
+			end
+			if not Dialogue then return end
+			DestroyAlign()
+			CleanUp()
+			return
+		end
+	end)
+
+	Connection2 = UIS.InputBegan:Connect(function(input, IsTyping)
+		if IsTyping then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			textObject:Show()
+			if CD.Type == "Farewell" then
+				if Connection1 then
+					Connection1:Disconnect()
+					Connection1 = nil
+				else
+					return
+				end
+				if Connection2 then
+					Connection2:Disconnect()
+					Connection2 = nil
+				else
+					return
+				end
+				if not Dialogue then return end
+				DestroyAlign()
+				CleanUp()
+				return
+			end
+		end
+	end)
+end
+
+local function Setup()
+	if debounce then return end
+	debounce = true
+	
+	if textObject then
+		textObject:Show()
+	end
+	for i, v in DialogueText:GetDescendants() do
+		v:Destroy()
+	end
+	
+	if Connection1 then
+		Connection1:Disconnect()
+		Connection1 = nil
+	end
+	if Connection2 then
+		Connection2:Disconnect()
+		Connection2 = nil
+	end
+
+	local CD = DialogueModule.GetDialogue(TalkingTo, CurrentDialogue)
+
+	local HRP = Player.Character.HumanoidRootPart
+	local Pos = HRP.Position
+	local CF = HRP.CFrame
+
+	AlignPos = Instance.new("AlignPosition", HRP)
+	AlignPos.Mode = Enum.PositionAlignmentMode.OneAttachment
+	AlignPos.MaxForce = math.huge
+	AlignPos.Position = Pos
+	AlignPos.Attachment0 = HRP.RootAttachment
+	AlignPos.RigidityEnabled = true
+	AlignPos.Responsiveness = 1000000
+	AlignPos.Name = "DialoguePos"
+
+	AlignOri = Instance.new("AlignOrientation", HRP)
+	AlignOri.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	AlignOri.MaxTorque = math.huge
+	AlignOri.CFrame = CF
+	AlignOri.Attachment0 = HRP.RootAttachment
+	AlignOri.RigidityEnabled = true
+	AlignOri.Responsiveness = 1000000
+	AlignOri.Name = "DialogueOri"
+
+	Frame.Visible = false
+	Frame.Size = UDim2.new(0, 0, 0, 0)
+
+	ButtonFrame.Visible = false
+	ButtonFrame.Size = UDim2.new(0, 0, 1, 0)
+
+	FrameInTween:Play()
+	Frame.Visible = true
+
+	DialogueFrame.NameFrame.CharName.Text = "-" .. TalkingTo .. "-"
+
+	FrameInTween.Completed:Connect(function()
+		Dialogue = true
+		debounce = false
+		Text()
+	end)
+end
+
+local function HandleInput()
+	if debounce then return end
+	local CanSetup = CheckIfPlayerIsInArea(Player.Character.HumanoidRootPart)
+	if Dialogue then CanSetup = true end
+	if CanSetup then
+		local CD = DialogueModule.GetDialogue(TalkingTo, CurrentDialogue)
+		if (not CD or not CD.Type) then
+			if not Dialogue then
+				Setup()
+			elseif Dialogue then
+				Text()
+			end
+		else
+			if CD and CD.Type == "Question" then
+			elseif CD and CD.Type == "Farewell" then
+				CleanUp()
+			else
+				CleanUp()
+			end
+		end
+	end
+end
+
+UIS.TouchTap:Connect(function(TPos, IsTyping)
+	if IsTyping then return end
+	HandleInput()
+end)
+
+UIS.InputBegan:Connect(function(input, IsTyping)
+	if IsTyping then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		HandleInput()
+	end
+end)
